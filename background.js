@@ -1,4 +1,10 @@
 import { openDB, putChunk } from './idb.js';
+
+// enable side panel always
+if (chrome?.sidePanel?.setOptions) {
+  try { chrome.sidePanel.setOptions({ path: 'popup.html', enabled: true }); }
+  catch (e) { console.warn('[GPT-Capture] sidePanel setOptions failed', e); }
+}
 const WS_URL = '';
 let ws, wsReady = false, backoff = 500;
 const connectWS = () => {
