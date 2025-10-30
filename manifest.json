@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "GPT Output Capture (KAIRO Nexus Bridge)",
+  "version": "0.1.0",
+  "description": "ChatGPT WebUIの出力をキャプチャし、IndexedDBへ保存。任意でNexusへストリーム転送。",
+  "action": { "default_popup": "popup.html" },
+  "permissions": ["storage"],
+  "host_permissions": ["https://chatgpt.com/*", "https://*.openai.com/*"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "content_scripts": [ { "matches": ["https://chatgpt.com/*", "https://*.openai.com/*"], "js": ["content.js"], "run_at": "document_idle" } ]
+}
