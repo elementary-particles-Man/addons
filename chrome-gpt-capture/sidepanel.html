@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang='ja'>
+<head>
+<meta charset='UTF-8'>
+<title>GPT Capture Viewer</title>
+<style>
+body{font-family:monospace;background:#111;color:#0f0;margin:0;padding:1em;white-space:pre-wrap;}
+#status{color:#0af;}
+</style>
+</head>
+<body>
+<div id='status'>📡 Waiting for data...</div>
+<pre id='view'></pre>
+<script>
+chrome.runtime.sendMessage({type:'REQUEST_FULL_DUMP'},(r)=>{
+  if(r?.ok){
+    document.getElementById('status').textContent='✅ Capture Loaded';
+    document.getElementById('view').textContent=r.text;
+  }else{
+    document.getElementById('status').textContent='⚠️ No Capture Data';
+  }
+});
+</script>
+</body>
+</html>

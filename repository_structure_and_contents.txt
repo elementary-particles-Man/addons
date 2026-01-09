@@ -1,0 +1,649 @@
+Repository structure (excluding .git):
+.
+├── .gitignore
+├── README.md
+├── chrome-gpt-booster/
+│   ├── assets/
+│   │   ├── icon128.png
+│   │   ├── icon16.png
+│   │   └── icon48.png
+│   ├── background.js
+│   ├── booster.js
+│   ├── manifest.json
+│   ├── popup.html
+│   ├── popup.js
+│   └── shared/
+│       └── selector.js
+├── chrome-gpt-capture/
+│   ├── SIGNING.txt
+│   ├── assets/
+│   │   ├── icon128.png
+│   │   ├── icon16.png
+│   │   └── icon48.png
+│   ├── background.js
+│   ├── content.js
+│   ├── idb.js
+│   ├── manifest.json
+│   ├── popup.html
+│   ├── popup.js
+│   └── sidepanel.html
+└── file.txt
+
+
+File contents:
+
+--- .gitignore ---
+node_modules/
+
+--- README.md ---
+# Chrome GPT Capture Extension (local)
+
+--- file.txt ---
+
+    Directory: U:\Develop\chrome-gpt-extensions
+
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+d----          2025/10/31    12:56                chrome-gpt-capture
+-a---          2025/10/31     5:50             15 .gitignore
+-a---          2025/11/01     5:52            235 file.txt
+-a---          2025/10/31    12:48             40 README.md
+
+    Directory: U:\Develop\chrome-gpt-extensions\chrome-gpt-capture
+
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+d----          2025/10/31    12:48                assets
+d----          2025/10/31    12:48                patches
+-a---          2025/11/01     4:46           2064 background.js
+-a---          2025/11/01     5:46           1886 content.js
+-a---          2025/11/01     4:28           1538 idb.js
+-a---          2025/11/01     4:36           1002 manifest.json
+-a---          2025/11/01     4:28            496 popup.html
+-a---          2025/11/01     4:29           1372 popup.js
+-a---          2025/11/01     4:29            196 sidepanel.html
+-a---          2025/10/31    12:56            132 SIGNING.txt
+
+    Directory: U:\Develop\chrome-gpt-extensions\chrome-gpt-capture\assets
+
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+-a---          2025/10/31    12:48            182 icon128.png
+-a---          2025/10/31    12:48            107 icon16.png
+-a---          2025/10/31    12:48            126 icon48.png
+
+--- chrome-gpt-booster/manifest.json ---
+{
+  "manifest_version": 3,
+  "name": "Chrome GPT Booster",
+  "version": "3.4.0",
+  "description": "Adaptive rendering booster for ChatGPT — Thinking-aware, HUD, FailSafe, Mode A/B switchable (default=B). Updated for new ChatGPT DOM (2025).",
+  "permissions": ["scripting", "tabs", "storage"],
+  "host_permissions": ["https://chat.openai.com/*", "https://chatgpt.com/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://chat.openai.com/*", "https://chatgpt.com/*"],
+      "js": ["booster.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": "assets/icon48.png"
+  },
+  "icons": {
+    "16": "assets/icon16.png",
+    "48": "assets/icon48.png",
+    "128": "assets/icon128.png"
+  }
+}
+
+--- chrome-gpt-booster/background.js ---
+// Booster 3.3 background
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.storage.sync.set({
+    boosterMode: 'B',
+    boosterHudEnabled: true
+  });
+  console.log('[Booster] Installed (default=B, HUD=on)');
+});
+
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.type === 'mode-switch') {
+    console.log(`[Booster] Mode changed to ${msg.mode}`);
+  }
+  if (msg.type === 'hud-toggle') {
+    console.log(`[Booster] HUD toggled: ${msg.enabled}`);
+  }
+});
+
+--- chrome-gpt-booster/booster.js ---
+// booster.js v3.0 unified-final
+// Thinking＋通常モード両対応＋冗長監視ゼロ＋最速レンダリング
+
+import { detectTargetRoot } from "./shared/selector.js";
+
+(() => {
+  const VERSION = "Booster v3.0 unified-final";
+
+  console.log(`[GPT-Booster] active (${VERSION})`);
+
+  let observer = null;
+  let lastHash = "";
+  let attached = false;
+
+  function throttle(fn, ms) {
+    let last = 0;
+    return (...args) => {
+      const now = Date.now();
+      if (now - last >= ms) {
+        last = now;
+        fn(...args);
+      }
+    };
+  }
+
+  function simpleHash(text) {
+    let h = 0;
+    for (let i = 0; i < text.length; i++)
+      h = Math.imul(31, h) + text.charCodeAt(i) | 0;
+    return h.toString(16);
+  }
+
+  function optimizeLayout() {
+    const style = document.createElement("style");
+    style.textContent = `
+      .markdown, .prose {
+        contain: layout style;
+        transform: translateZ(0);
+        backface-visibility: hidden;
+      }
+      .overflow-y-auto {
+        will-change: scroll-position;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function attachObserver() {
+    if (attached) return;  // ← 多重 attach 防止（決定的）
+
+    const root = detectTargetRoot();
+    if (!root) {
+      console.warn("[GPT-Booster] targetRoot not found, retrying...");
+      return setTimeout(attachObserver, 1000);
+    }
+
+    observer = new MutationObserver(
+      throttle((mutations) => {
+        for (const m of mutations) {
+          for (const node of m.addedNodes) {
+            if (node.nodeType !== 1) continue;
+
+            const text = node.innerText?.trim() || "";
+            if (text.length < 4) continue;
+
+            const h = simpleHash(text.slice(0, 300));
+            if (lastHash === h) continue;
+            lastHash = h;
+
+            console.debug(`[GPT-Booster] update detected len=${text.length}`);
+          }
+        }
+      }, 250)
+    );
+
+    observer.observe(root, { childList: true, subtree: true });
+
+    attached = true;
+    console.log(`[GPT-Booster] observer attached (${VERSION})`);
+  }
+
+  function init() {
+    optimizeLayout();
+    attachObserver();
+  }
+
+  if (document.readyState !== "loading") init();
+  else window.addEventListener("DOMContentLoaded", init);
+})();
+
+--- chrome-gpt-booster/popup.html ---
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Booster</title>
+  <style>
+    body { font-family: sans-serif; padding: 12px; width: 260px; }
+    h3 { margin-top: 0; }
+    #status { font-size: 12px; margin-top: 8px; color: #444; }
+    label { font-size: 13px; }
+    .section { margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h3>GPT Booster 3.3</h3>
+
+  <div class="section">
+    <div><strong>Mode</strong></div>
+    <label><input type="radio" name="mode" value="B" checked /> Safe Mode (B)</label><br>
+    <label><input type="radio" name="mode" value="A" /> High-Power Mode (A)</label>
+  </div>
+
+  <div class="section">
+    <div><strong>HUD</strong></div>
+    <label><input type="checkbox" id="hudEnabled" checked /> Show HUD overlay</label>
+  </div>
+
+  <p id="status"></p>
+  <script src="popup.js"></script>
+</body>
+</html>
+
+--- chrome-gpt-booster/popup.js ---
+document.addEventListener('DOMContentLoaded', () => {
+  chrome.storage.sync.get(['boosterMode', 'boosterHudEnabled'], ({ boosterMode, boosterHudEnabled }) => {
+    const mode = boosterMode || 'B';
+    const radio = document.querySelector(`input[name="mode"][value="${mode}"]`);
+    if (radio) radio.checked = true;
+
+    const hudEnabled = (typeof boosterHudEnabled === 'boolean') ? boosterHudEnabled : true;
+    const hudCheckbox = document.getElementById('hudEnabled');
+    if (hudCheckbox) hudCheckbox.checked = hudEnabled;
+  });
+
+  for (const el of document.querySelectorAll('input[name="mode"]')) {
+    el.addEventListener('change', () => {
+      const val = el.value;
+      chrome.storage.sync.set({ boosterMode: val });
+      const status = document.getElementById('status');
+      if (status) status.textContent = `Mode switched to ${val}`;
+      chrome.runtime.sendMessage({ type: 'mode-switch', mode: val });
+    });
+  }
+
+  const hudCheckbox = document.getElementById('hudEnabled');
+  if (hudCheckbox) {
+    hudCheckbox.addEventListener('change', () => {
+      const enabled = hudCheckbox.checked;
+      chrome.storage.sync.set({ boosterHudEnabled: enabled });
+      const status = document.getElementById('status');
+      if (status) status.textContent = enabled ? 'HUD enabled' : 'HUD disabled';
+      chrome.runtime.sendMessage({ type: 'hud-toggle', enabled });
+    });
+  }
+});
+
+--- chrome-gpt-booster/shared/selector.js ---
+// shared/selector.js v1.0
+// ChatGPT UI の DOM 変化に強く、Thinking/通常の両方を確実に捕捉する selector resolver
+
+export function detectTargetRoot() {
+  const candidates = [
+    // 通常モード（記事列）
+    "#thread",
+    "#__next main .flex-col.grow",
+    "main div.flex-col.grow",
+
+    // Thinking モード（article が shadow/仮想DOM化）
+    "#__next main div.relative.basis-auto.flex-col",
+    "#__next main div.thread-xl\\:pt-header-height",
+    "div.thread-xl\\:pt-header-height",
+
+    // 最終フォールバック
+    "#__next",
+    "main",
+    "body"
+  ];
+
+  for (const sel of candidates) {
+    const el = document.querySelector(sel);
+    if (el) return el;
+  }
+
+  return null;
+}
+
+--- chrome-gpt-booster/assets/icon16.png (base64) ---
+iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAAAAAA6mKC9AAAAAmJLR0QA/4ePzL8AAAAHdElNRQfp
+Ch8DMDU05vMLAAAAEUlEQVQY02OsY0AFTAwjWgAAl3IAngqOAesAAAAASUVORK5CYII=
+
+--- chrome-gpt-booster/assets/icon48.png (base64) ---
+iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAAAAAByaaZbAAAAAmJLR0QA/4ePzL8AAAAHdElNRQfp
+Ch8DMDU05vMLAAAAJElEQVRIx2OsYyANMJGoflTDqIZRDaMaRjWMahjVMKphiGsAAEesAN72kbUX
+AAAAAElFTkSuQmCC
+
+--- chrome-gpt-booster/assets/icon128.png (base64) ---
+iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAAAAADmVT4XAAAAAmJLR0QA/4ePzL8AAAAHdElNRQfp
+Ch8DMDU05vMLAAAAXElEQVR42u3OMQEAAAjDsIFwtCNjT2qgmUu3Lf8BAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADyQsIBfjHwEx8A
+AAAASUVORK5CYII=
+
+--- chrome-gpt-capture/manifest.json ---
+{  "manifest_version": 3,
+  "name": "GPT Capture",
+  "description": "ChatGPT output capture (2025 UI) — virtual DOM compatible, async diff, IndexedDB buffering",
+  "version": "4.0",
+  "permissions": ["storage", "activeTab", "scripting", "sidePanel"],
+  "host_permissions": [
+    "https://chat.openai.com/*",
+    "https://chatgpt.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "GPT Capture",
+    "default_icon": {
+      "16": "assets/icon16.png",
+      "48": "assets/icon48.png",
+      "128": "assets/icon128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chat.openai.com/*",
+        "https://chatgpt.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "icons": {
+    "16": "assets/icon16.png",
+    "48": "assets/icon48.png",
+    "128": "assets/icon128.png"
+  }
+}
+
+--- chrome-gpt-capture/background.js ---
+// background.js v3.4
+chrome.runtime.onInstalled.addListener(() => {
+  console.log('chrome-gpt-capture v3.4 initialized');
+});
+
+// アクションボタンでsidepanel起動
+chrome.action.onClicked.addListener(async (tab) => {
+  try {
+    await chrome.sidePanel.open({ tabId: tab.id });
+  } catch (e) {
+    console.warn('sidepanel open failed', e);
+  }
+});
+
+// content.js → sidepanel通信用
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.type === 'REQUEST_FULL_DUMP') {
+    chrome.storage.local.get(['captureBuffer'], (res) => {
+      sendResponse({ ok: true, text: res.captureBuffer || '(no data)' });
+    });
+    return true;
+  }
+});
+
+--- chrome-gpt-capture/content.js ---
+// content.js / capture.js v4.0 unified-final
+// Thinking＋通常両対応、差分抽出、高速・安定キャプチャ
+
+import { detectTargetRoot } from "./shared/selector.js";
+
+(() => {
+  const VERSION = "Capture v4.0 unified-final";
+  console.log(`[GPT-Capture] active (${VERSION})`);
+
+  let observer = null;
+  let attached = false;
+  let lastHash = "";
+
+  function send(data) {
+    chrome.runtime?.sendMessage?.({ type: "CAPTURE_LOG", data });
+  }
+
+  function simpleHash(text) {
+    let h = 0;
+    for (let i = 0; i < text.length; i++)
+      h = Math.imul(31, h) + text.charCodeAt(i) | 0;
+    return h.toString(16);
+  }
+
+  const TARGET_NODE_FILTERS = [
+    "article",
+    ".markdown.prose",
+    "div.flex.max-w-full.flex-col.grow > div > div > div"
+  ];
+
+  function shouldCapture(node) {
+    if (!node || node.nodeType !== 1) return false;
+    for (const sel of TARGET_NODE_FILTERS) {
+      if (node.matches?.(sel) || node.querySelector?.(sel)) return true;
+    }
+    return false;
+  }
+
+  function handleNode(node) {
+    const text = node.innerText?.trim() || "";
+    if (text.length < 3) return;
+    const h = simpleHash(text.slice(0, 200));
+
+    if (h === lastHash) return;
+    lastHash = h;
+
+    send({
+      event: "chunk",
+      sample: text.slice(0, 120),
+      len: text.length,
+      ts: Date.now(),
+    });
+
+    console.debug(`[GPT-Capture] chunk len=${text.length}`);
+  }
+
+  function attachObserver() {
+    if (attached) return;
+
+    const root = detectTargetRoot();
+    if (!root) {
+      console.warn("[GPT-Capture] targetRoot not found, retrying...");
+      return setTimeout(attachObserver, 1000);
+    }
+
+    observer = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        for (const node of m.addedNodes) {
+          if (shouldCapture(node)) handleNode(node);
+        }
+      }
+    });
+
+    observer.observe(root, { childList: true, subtree: true });
+    attached = true;
+
+    console.log(`[GPT-Capture] observer attached (${VERSION})`);
+    send({ event: "session", status: "started", version: VERSION });
+  }
+
+  function init() {
+    attachObserver();
+  }
+
+  if (document.readyState !== "loading") init();
+  else window.addEventListener("DOMContentLoaded", init);
+})();
+
+--- chrome-gpt-capture/idb.js ---
+export const openDB = (name = 'gpt-capture', store = 'chunks') =>
+  new Promise((resolve, reject) => {
+    const req = indexedDB.open(name, 1);
+    req.onupgradeneeded = event => {
+      const db = event.target.result;
+      if (!db.objectStoreNames.contains(store)) {
+        const os = db.createObjectStore(store, { keyPath: 'id', autoIncrement: true });
+        os.createIndex('ts', 'ts', { unique: false });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+
+export const putChunk = (db, store, data) =>
+  new Promise((resolve, reject) => {
+    const tx = db.transaction(store, 'readwrite');
+    tx.objectStore(store).add(data);
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
+
+export const getAll = (db, store, limit = 200) =>
+  new Promise((resolve, reject) => {
+    const out = [];
+    const tx = db.transaction(store, 'readonly');
+    const idx = tx.objectStore(store).index('ts');
+    const req = idx.openCursor(null, 'prev');
+    req.onsuccess = event => {
+      const cursor = event.target.result;
+      if (!cursor || out.length >= limit) {
+        resolve(out);
+        return;
+      }
+      out.push(cursor.value);
+      cursor.continue();
+    };
+    req.onerror = () => reject(req.error);
+  });
+
+export const clearAll = (db, store) =>
+  new Promise((resolve, reject) => {
+    const tx = db.transaction(store, 'readwrite');
+    tx.objectStore(store).clear();
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
+
+--- chrome-gpt-capture/popup.html ---
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>GPT Capture</title>
+<style>
+body{font-family:sans-serif;width:320px}
+button{margin:4px;padding:4px 8px}
+pre{white-space:pre-wrap;max-height:320px;overflow:auto}
+</style>
+</head>
+<body>
+<h3>GPT Output Capture</h3>
+<div>
+  <button id="flush">最新200件コピー</button>
+  <button id="clear">全消去</button>
+  <button id="toggle">モード: light</button>
+</div>
+<pre id="log"></pre>
+<script src="popup.js"></script>
+</body>
+</html>
+
+--- chrome-gpt-capture/popup.js ---
+const port = chrome.runtime.connect({ name: 'popup-ui' });
+port.postMessage({ type: 'PING_UI' });
+port.onMessage.addListener(msg => {
+  if (msg.type === 'PONG') {
+    document.getElementById('toggle').textContent = 'モード: ' + msg.mode;
+  }
+});
+
+const logEl = document.getElementById('log');
+
+const flush = () =>
+  chrome.runtime.sendMessage({ type: 'REQUEST_FULL_DUMP' }, resp => {
+    if (resp?.ok) {
+      navigator.clipboard.writeText(resp.text || '').then(
+        () => {
+          logEl.textContent = 'Copied ' + resp.count + ' items.';
+        },
+        () => {
+          logEl.textContent = 'Clipboard error.';
+        }
+      );
+    } else {
+      logEl.textContent = 'No data';
+    }
+  });
+
+const clear = () =>
+  chrome.runtime.sendMessage({ type: 'CLEAR_ALL' }, resp => {
+    logEl.textContent = resp?.ok ? 'Cleared' : 'Failed to clear.';
+  });
+
+const toggle = () => {
+  const button = document.getElementById('toggle');
+  const next = button.textContent.includes('light') ? 'normal' : 'light';
+  chrome.runtime.sendMessage(
+    { type: 'SET_MODE', payload: { mode: next } },
+    response => {
+      if (response?.ok) {
+        button.textContent = 'モード: ' + response.mode;
+      }
+    }
+  );
+};
+
+document.getElementById('flush').onclick = flush;
+document.getElementById('clear').onclick = clear;
+document.getElementById('toggle').onclick = toggle;
+
+--- chrome-gpt-capture/sidepanel.html ---
+<!DOCTYPE html>
+<html lang='ja'>
+<head>
+<meta charset='UTF-8'>
+<title>GPT Capture Viewer</title>
+<style>
+body{font-family:monospace;background:#111;color:#0f0;margin:0;padding:1em;white-space:pre-wrap;}
+#status{color:#0af;}
+</style>
+</head>
+<body>
+<div id='status'>📡 Waiting for data...</div>
+<pre id='view'></pre>
+<script>
+chrome.runtime.sendMessage({type:'REQUEST_FULL_DUMP'},(r)=>{
+  if(r?.ok){
+    document.getElementById('status').textContent='✅ Capture Loaded';
+    document.getElementById('view').textContent=r.text;
+  }else{
+    document.getElementById('status').textContent='⚠️ No Capture Data';
+  }
+});
+</script>
+</body>
+</html>
+
+--- chrome-gpt-capture/SIGNING.txt ---
+Sign this v2.1 build to install outside Developer Mode:
+chrome --pack-extension=chrome-gpt-capture --pack-extension-key=private.pem
+
+--- chrome-gpt-capture/assets/icon16.png (base64) ---
+iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAAAAAA6mKC9AAAAAmJLR0QA/4ePzL8AAAAHdElNRQfp
+Ch8DMDU05vMLAAAAEUlEQVQY02OsY0AFTAwjWgAAl3IAngqOAesAAAAASUVORK5CYII=
+
+--- chrome-gpt-capture/assets/icon48.png (base64) ---
+iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAAAAAByaaZbAAAAAmJLR0QA/4ePzL8AAAAHdElNRQfp
+Ch8DMDU05vMLAAAAJElEQVRIx2OsYyANMJGoflTDqIZRDaMaRjWMahjVMKphiGsAAEesAN72kbUX
+AAAAAElFTkSuQmCC
+
+--- chrome-gpt-capture/assets/icon128.png (base64) ---
+iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAAAAADmVT4XAAAAAmJLR0QA/4ePzL8AAAAHdElNRQfp
+Ch8DMDU05vMLAAAAXElEQVR42u3OMQEAAAjDsIFwtCNjT2qgmUu3Lf8BAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADyQsIBfjHwEx8A
+AAAASUVORK5CYII=

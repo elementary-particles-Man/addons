@@ -1,16 +1,46 @@
-document.addEventListener('DOMContentLoaded', () => {
-  chrome.storage.sync.get(['boosterMode'], ({ boosterMode }) => {
-    const mode = boosterMode || 'B';
-    const radio = document.querySelector(`input[value="${mode}"]`);
-    if (radio) radio.checked = true;
-  });
+(function () {
+  const DEFAULT_CONFIG = {
+    aggressive: false,
+    thinkingBoost: true
+  };
 
-  for (const el of document.querySelectorAll('input[name="mode"]')) {
-    el.addEventListener('change', () => {
-      const val = el.value;
-      chrome.storage.sync.set({ boosterMode: val });
-      document.getElementById('status').textContent = `Mode switched to ${val}`;
-      chrome.runtime.sendMessage({ type: 'mode-switch', mode: val });
+  function loadConfig(cb) {
+    if (!chrome.storage || !chrome.storage.local) {
+      cb({ ...DEFAULT_CONFIG });
+      return;
+    }
+    chrome.storage.local.get(["boosterConfig"], (data) => {
+      const conf = (data && data.boosterConfig) || {};
+      cb({ ...DEFAULT_CONFIG, ...conf });
     });
   }
-});
+
+  function saveConfig(conf) {
+    if (!chrome.storage || !chrome.storage.local) return;
+    chrome.storage.local.set({ boosterConfig: conf });
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    const aggressiveEl = document.getElementById("aggressive");
+    const thinkingEl = document.getElementById("thinkingBoost");
+
+    loadConfig((conf) => {
+      aggressiveEl.checked = !!conf.aggressive;
+      thinkingEl.checked = !!conf.thinkingBoost;
+    });
+
+    aggressiveEl.addEventListener("change", () => {
+      loadConfig((conf) => {
+        conf.aggressive = aggressiveEl.checked;
+        saveConfig(conf);
+      });
+    });
+
+    thinkingEl.addEventListener("change", () => {
+      loadConfig((conf) => {
+        conf.thinkingBoost = thinkingEl.checked;
+        saveConfig(conf);
+      });
+    });
+  });
+})();

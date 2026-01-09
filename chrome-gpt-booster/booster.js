@@ -1,139 +1,166 @@
-// GPT Booster 3.1 — A/B mode + Thinking detection (closed-shadow safe)
-(() => {
-  const VERSION = '3.1';
-  console.log(`[GPT-Booster] active v${VERSION}`);
+// GPT-Booster v5.2 ultra-passive — ChatGPT 5.2 (standalone, single attach)
 
-  let mode = 'B';
-  let observer = null;
-  let lastScroll = 0;
+const DEBUG = false;
+const OBS_CONFIG = { childList: true, subtree: false };
+const SELECTORS = {
+  root: "article[data-testid^='conversation-turn']:last-of-type",
+  rootFallback: "article"
+};
+const MAX_ROOT_CHARS = 12000;
+const MAX_ROOT_ATTACH_TRIES = 3;
 
-  chrome.storage.sync.get(['boosterMode'], ({ boosterMode }) => {
-    mode = boosterMode || 'B';
-    console.log(`[GPT-Booster] Mode=${mode}`);
-    init();
-  });
+let lastScrollTop = null;
+let activeRoot = null;
+let activeObserver = null;
+let rootCheckTimer = null;
+let thinkingMode = false;
+let scrollClampEnabled = false;
+const rootAttachAttempts = new WeakMap();
 
-  chrome.runtime.onMessage.addListener((msg) => {
-    if (msg.type === 'mode-switch') {
-      mode = msg.mode;
-      console.log(`[GPT-Booster] Runtime switch → ${mode}`);
-      resetObserver();
-      init();
+const safeIdle = (cb, delay = 1200) => {
+  if (typeof requestIdleCallback === "function") {
+    return requestIdleCallback(cb, { timeout: delay });
+  }
+  return setTimeout(cb, delay);
+};
+
+function isThinking(root) {
+  if (!root) return false;
+  const testId = root.getAttribute("data-testid") || "";
+  if (/thinking|generating|streaming/i.test(testId)) return true;
+  const className = typeof root.className === "string" ? root.className : "";
+  if (/thinking|generating|streaming/i.test(className)) return true;
+  const thinkingNode = root.querySelector(
+    '[data-testid*="thinking"], [data-testid*="generating"], .thinking, .generating, .streaming'
+  );
+  return Boolean(thinkingNode);
+}
+
+function hasAssistantToken(root) {
+  if (!root) return false;
+  return Boolean(root.querySelector('[data-message-author-role="assistant"]'));
+}
+
+function getLatestRoot() {
+  const preferred = document.querySelector(SELECTORS.root);
+  if (preferred) return preferred;
+  const fallbackNodes = document.querySelectorAll(SELECTORS.rootFallback);
+  return fallbackNodes[fallbackNodes.length - 1] || null;
+}
+
+function getAttachAttempts(root) {
+  return rootAttachAttempts.get(root) || 0;
+}
+
+function bumpAttachAttempts(root) {
+  const next = getAttachAttempts(root) + 1;
+  rootAttachAttempts.set(root, next);
+  return next;
+}
+
+function setActiveRoot(root) {
+  if (activeObserver) {
+    activeObserver.disconnect();
+    activeObserver = null;
+  }
+  activeRoot = root;
+}
+
+function attachObserver(root) {
+  const rootChars = (root.textContent || "").length;
+  if (rootChars > MAX_ROOT_CHARS) {
+    rootAttachAttempts.set(root, MAX_ROOT_ATTACH_TRIES);
+    return;
+  }
+  activeObserver = new MutationObserver(() => {});
+  activeObserver.observe(root, OBS_CONFIG);
+}
+
+function scheduleRootCheck(delay = 1200) {
+  if (rootCheckTimer) return;
+  rootCheckTimer = safeIdle(() => {
+    rootCheckTimer = null;
+    checkRoot();
+  }, delay);
+}
+
+function attemptAttach(root) {
+  if (!root) {
+    scheduleRootCheck(1200);
+    return;
+  }
+  if (root !== activeRoot) {
+    setActiveRoot(root);
+  }
+  if (isThinking(root)) {
+    thinkingMode = true;
+    if (activeObserver) {
+      activeObserver.disconnect();
+      activeObserver = null;
     }
-  });
-
-  function resetObserver() {
-    if (observer) observer.disconnect();
-    observer = null;
-  }
-
-  /* ------------------------------ */
-  /*  Reflow Optimization           */
-  /* ------------------------------ */
-  function optimizeReflowSafe() {
-    const s = document.createElement('style');
-    s.textContent = `
-      .markdown, .prose { contain: layout style; }
-      .overflow-y-auto { will-change: scroll-position; }
-    `;
-    document.head.appendChild(s);
-  }
-
-  function optimizeReflowAggressive() {
-    const s = document.createElement('style');
-    s.textContent = `
-      .markdown, .prose {
-        contain: layout style;
-        backface-visibility: hidden;
-        transform: translateZ(0);
-      }
-      .overflow-y-auto { will-change: scroll-position; }
-      article { transform: translateZ(0); }
-    `;
-    document.head.appendChild(s);
-  }
-
-  /* ------------------------------ */
-  /*  Thinking Detection (shadow safe)  */
-  /* ------------------------------ */
-  function thinkingPulse() {
-    function tick() {
-      const area = document.querySelector('.overflow-y-auto');
-      if (area) {
-        const h = area.scrollHeight;
-        if (Math.abs(h - lastScroll) > 2) {
-          console.debug('[GPT-Booster] Thinking pulse detected');
-        }
-        lastScroll = h;
-      }
-      requestAnimationFrame(tick);
+    if (scrollClampEnabled) {
+      window.removeEventListener("scroll", clampScroll, { passive: true });
+      scrollClampEnabled = false;
     }
-    tick();
+    return;
   }
-
-  function thinkingBadgeDetector() {
-    const sel = '[data-message-author-role="assistant"] [data-testid="thinking"]';
-    setInterval(() => {
-      const node = document.querySelector(sel);
-      if (!node) return;
-      const s = window.getComputedStyle(node);
-      if (s.opacity !== '0') {
-        console.debug('[GPT-Booster] Thinking badge active');
-      }
-    }, 300);
+  if (activeObserver) {
+    const rootChars = (root.textContent || "").length;
+    if (rootChars > MAX_ROOT_CHARS) {
+      activeObserver.disconnect();
+      activeObserver = null;
+      rootAttachAttempts.set(root, MAX_ROOT_ATTACH_TRIES);
+    }
+    return;
   }
-
-  /* ------------------------------ */
-  /*  DOM Observer (answer-phase)   */
-  /* ------------------------------ */
-  function attachObserver(mode) {
-    const root = document.querySelector('#thread');
-    if (!root) return setTimeout(() => attachObserver(mode), 800);
-
-    const selectors = [
-      'article .markdown.prose',
-      'div.flex.max-w-full.flex-col.grow > div > div > div'
-    ];
-
-    const delay = mode === 'A' ? 200 : 500;
-
-    observer = new MutationObserver(throttle(muts => {
-      for (const m of muts) {
-        for (const n of m.addedNodes) {
-          if (n.nodeType !== 1) continue;
-          const sel = selectors.find(s => n.matches?.(s) || n.querySelector?.(s));
-          if (!sel) continue;
-          console.debug(`[GPT-Booster] Update (mode=${mode})`);
-        }
-      }
-    }, delay));
-
-    observer.observe(root, { childList: true, subtree: true });
-    console.log(`[GPT-Booster] DOM observer attached (mode=${mode})`);
+  const attempts = getAttachAttempts(root);
+  if (attempts >= MAX_ROOT_ATTACH_TRIES) return;
+  if (!hasAssistantToken(root)) {
+    bumpAttachAttempts(root);
+    scheduleRootCheck(1200);
+    return;
   }
-
-  function throttle(fn, delay) {
-    let t = 0;
-    return (...args) => {
-      const now = Date.now();
-      if (now - t >= delay) {
-        t = now;
-        fn(...args);
-      }
-    };
+  if (!scrollClampEnabled) {
+    window.addEventListener("scroll", clampScroll, { passive: true });
+    scrollClampEnabled = true;
   }
+  attachObserver(root);
+}
 
-  /* ------------------------------ */
-  /*  Init                         */
-  /* ------------------------------ */
-  function init() {
-    if (mode === 'A') optimizeReflowAggressive();
-    else optimizeReflowSafe();
-
-    attachObserver(mode);
-    thinkingPulse();
-    thinkingBadgeDetector();
-
-    console.log(`[GPT-Booster] Initialized mode=${mode}`);
+function checkRoot() {
+  if (thinkingMode) return;
+  const latest = getLatestRoot();
+  if (!latest) {
+    scheduleRootCheck(1200);
+    return;
   }
-})();
+  attemptAttach(latest);
+  if (!thinkingMode) scheduleRootCheck(1200);
+}
+
+function clampScroll() {
+  const scroller = document.scrollingElement || document.documentElement;
+  if (!scroller) return;
+  const current = scroller.scrollTop;
+  if (lastScrollTop === null) {
+    lastScrollTop = current;
+    return;
+  }
+  const delta = current - lastScrollTop;
+  if (delta < -800) {
+    scroller.scrollTop = lastScrollTop - 800;
+    lastScrollTop = scroller.scrollTop;
+    return;
+  }
+  lastScrollTop = current;
+}
+
+function start() {
+  scheduleRootCheck(0);
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", start, { once: true });
+} else {
+  start();
+}

@@ -1,0 +1,33 @@
+
+    Directory: U:\Develop\chrome-gpt-extensions
+
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+d----          2025/10/31    12:56                chrome-gpt-capture
+-a---          2025/10/31     5:50             15 .gitignore
+-a---          2025/11/01     5:52            235 file.txt
+-a---          2025/10/31    12:48             40 README.md
+
+    Directory: U:\Develop\chrome-gpt-extensions\chrome-gpt-capture
+
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+d----          2025/10/31    12:48                assets
+d----          2025/10/31    12:48                patches
+-a---          2025/11/01     4:46           2064 background.js
+-a---          2025/11/01     5:46           1886 content.js
+-a---          2025/11/01     4:28           1538 idb.js
+-a---          2025/11/01     4:36           1002 manifest.json
+-a---          2025/11/01     4:28            496 popup.html
+-a---          2025/11/01     4:29           1372 popup.js
+-a---          2025/11/01     4:29            196 sidepanel.html
+-a---          2025/10/31    12:56            132 SIGNING.txt
+
+    Directory: U:\Develop\chrome-gpt-extensions\chrome-gpt-capture\assets
+
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+-a---          2025/10/31    12:48            182 icon128.png
+-a---          2025/10/31    12:48            107 icon16.png
+-a---          2025/10/31    12:48            126 icon48.png
+

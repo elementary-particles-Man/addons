@@ -1,25 +1,36 @@
 {
   "manifest_version": 3,
-  "name": "Chrome GPT Booster",
-  "version": "3.1.0",
-  "description": "Adaptive rendering booster for ChatGPT — Thinking-aware, Mode A/B switchable (default=B).",
-  "permissions": ["scripting", "tabs", "storage"],
-  "host_permissions": ["https://chat.openai.com/*", "https://chatgpt.com/*"],
-  "background": { "service_worker": "background.js" },
+  "name": "ChatGPT Booster",
+  "version": "4.0.0",
+  "description": "GPT Booster v4.0 — safe core (no DOM interference, no logs).",
+  "permissions": [
+    "scripting",
+    "activeTab",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://chat.openai.com/*",
+    "https://gemini.google.com/*"
+  ],
   "content_scripts": [
     {
-      "matches": ["https://chat.openai.com/*", "https://chatgpt.com/*"],
-      "js": ["booster.js"],
-      "run_at": "document_start"
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*",
+        "https://gemini.google.com/*"
+      ],
+      "js": [
+        "booster.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
     }
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_icon": "assets/icon48.png"
-  },
-  "icons": {
-    "16": "assets/icon16.png",
-    "48": "assets/icon48.png",
-    "128": "assets/icon128.png"
+    "default_icon": {
+      "128": "assets/icon128.png"
+    }
   }
 }

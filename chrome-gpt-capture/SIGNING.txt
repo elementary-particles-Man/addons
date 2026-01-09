@@ -1,0 +1,2 @@
+Sign this v2.1 build to install outside Developer Mode:
+chrome --pack-extension=chrome-gpt-capture --pack-extension-key=private.pem

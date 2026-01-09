@@ -1,19 +1,43 @@
-<!doctype html>
+<!DOCTYPE html>
 <html>
 <head>
-  <meta charset="utf-8" />
-  <title>Booster</title>
+  <meta charset="UTF-8" />
   <style>
-    body { font-family: sans-serif; padding: 12px; width: 260px; }
-    h3 { margin-top: 0; }
-    #status { font-size: 12px; margin-top: 8px; color: #444; }
+    body {
+      width: 220px;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      padding: 10px;
+      font-size: 13px;
+    }
+    h1 {
+      margin: 0 0 8px 0;
+      font-size: 15px;
+    }
+    .row {
+      margin: 4px 0;
+    }
+    label {
+      cursor: pointer;
+    }
   </style>
 </head>
 <body>
-  <h3>GPT Booster 3.1</h3>
-  <label><input type="radio" name="mode" value="B" checked /> Safe Mode (B)</label><br>
-  <label><input type="radio" name="mode" value="A" /> High-Power Mode (A)</label>
-  <p id="status"></p>
+  <h1>ChatGPT Booster v3.1</h1>
+
+  <div class="row">
+    <label>
+      <input type="checkbox" id="aggressive" />
+      Aggressive speed mode
+    </label>
+  </div>
+
+  <div class="row">
+    <label>
+      <input type="checkbox" id="thinkingBoost" />
+      Thinking-mode optimization
+    </label>
+  </div>
+
   <script src="popup.js"></script>
 </body>
 </html>
