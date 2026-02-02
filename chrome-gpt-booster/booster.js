@@ -4,7 +4,8 @@ const DEBUG = false;
 const OBS_CONFIG = { childList: true, subtree: true };
 const SELECTORS = {
   assistant: '[data-message-author-role="assistant"]',
-  rootFallback: '[role="article"]'
+  rootFallback: '[role="article"]',
+  turns: '[data-message-author-role]'
 };
 const STABLE_TEXT_MS = 900;
 
@@ -44,6 +45,21 @@ function getLatestAssistant() {
   if (assistants.length) return assistants[assistants.length - 1];
   const fallbackNodes = document.querySelectorAll(SELECTORS.rootFallback);
   return fallbackNodes[fallbackNodes.length - 1] || null;
+}
+
+function annotateTurns() {
+  const turns = document.querySelectorAll(SELECTORS.turns);
+  turns.forEach((node) => {
+    if (!(node instanceof HTMLElement)) return;
+    const role = (node.getAttribute("data-message-author-role") || "").toLowerCase();
+    if (role === "user") {
+      node.setAttribute("data-gpt-booster-hidden-prefix", "USER:");
+      return;
+    }
+    if (role === "assistant") {
+      node.setAttribute("data-gpt-booster-hidden-prefix", "AI:");
+    }
+  });
 }
 
 function markAssistantState(node) {
@@ -88,6 +104,7 @@ function handleMutations() {
     mutationDebounceTimer = null;
   }
   const latest = getLatestAssistant();
+  annotateTurns();
   if (!latest) return;
 
   if (isThinking(latest)) {
@@ -134,6 +151,7 @@ function start() {
   if (!document.body) return;
   const observer = new MutationObserver(scheduleMutationHandling);
   observer.observe(document.body, OBS_CONFIG);
+  annotateTurns();
   handleMutations();
 }
 
