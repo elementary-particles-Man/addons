@@ -1,28 +1,22 @@
-// GPT-Booster v5.2 ultra-passive — ChatGPT 5.2 (standalone, single attach)
+// GPT-Booster v5.2 ultra-passive — ChatGPT output aware (standalone, body observer)
 
 const DEBUG = false;
-const OBS_CONFIG = { childList: true, subtree: false };
+const OBS_CONFIG = { childList: true, subtree: true };
 const SELECTORS = {
-  root: "article[data-testid^='conversation-turn']:last-of-type",
-  rootFallback: "article"
+  assistant: '[data-message-author-role="assistant"]',
+  rootFallback: '[role="article"]'
 };
-const MAX_ROOT_CHARS = 12000;
-const MAX_ROOT_ATTACH_TRIES = 3;
+const STABLE_TEXT_MS = 900;
 
 let lastScrollTop = null;
-let activeRoot = null;
-let activeObserver = null;
-let rootCheckTimer = null;
-let thinkingMode = false;
+let activeAssistant = null;
+let lastAssistantText = "";
+let lastAssistantChange = 0;
 let scrollClampEnabled = false;
-const rootAttachAttempts = new WeakMap();
+let mutationDebounceTimer = null;
+let finalizeTimer = null;
 
-const safeIdle = (cb, delay = 1200) => {
-  if (typeof requestIdleCallback === "function") {
-    return requestIdleCallback(cb, { timeout: delay });
-  }
-  return setTimeout(cb, delay);
-};
+window.__GPT_BOOSTER_NEW__ = true;
 
 function isThinking(root) {
   if (!root) return false;
@@ -31,111 +25,92 @@ function isThinking(root) {
   const className = typeof root.className === "string" ? root.className : "";
   if (/thinking|generating|streaming/i.test(className)) return true;
   const thinkingNode = root.querySelector(
-    '[data-testid*="thinking"], [data-testid*="generating"], .thinking, .generating, .streaming'
+    '[data-testid*="thinking"], [data-testid*="generating"], [data-testid*="streaming"], .thinking, .generating, .streaming'
   );
   return Boolean(thinkingNode);
 }
 
-function hasAssistantToken(root) {
+function hasStreamingCursor(root) {
   if (!root) return false;
-  return Boolean(root.querySelector('[data-message-author-role="assistant"]'));
+  return Boolean(
+    root.querySelector(
+      '[data-testid="cursor"], [data-testid*="cursor"], .cursor, .result-streaming, .typing, [class*="streaming"]'
+    )
+  );
 }
 
-function getLatestRoot() {
-  const preferred = document.querySelector(SELECTORS.root);
-  if (preferred) return preferred;
+function getLatestAssistant() {
+  const assistants = document.querySelectorAll(SELECTORS.assistant);
+  if (assistants.length) return assistants[assistants.length - 1];
   const fallbackNodes = document.querySelectorAll(SELECTORS.rootFallback);
   return fallbackNodes[fallbackNodes.length - 1] || null;
 }
 
-function getAttachAttempts(root) {
-  return rootAttachAttempts.get(root) || 0;
+function markAssistantState(node) {
+  const text = node ? node.textContent || "" : "";
+  if (node !== activeAssistant) {
+    activeAssistant = node;
+    lastAssistantText = text;
+    lastAssistantChange = Date.now();
+    return false;
+  }
+  if (text !== lastAssistantText) {
+    lastAssistantText = text;
+    lastAssistantChange = Date.now();
+    return false;
+  }
+  return true;
 }
 
-function bumpAttachAttempts(root) {
-  const next = getAttachAttempts(root) + 1;
-  rootAttachAttempts.set(root, next);
-  return next;
+function enableClamp() {
+  if (scrollClampEnabled) return;
+  window.addEventListener("scroll", clampScroll, { passive: true });
+  scrollClampEnabled = true;
 }
 
-function setActiveRoot(root) {
-  if (activeObserver) {
-    activeObserver.disconnect();
-    activeObserver = null;
-  }
-  activeRoot = root;
+function disableClamp() {
+  if (!scrollClampEnabled) return;
+  window.removeEventListener("scroll", clampScroll, { passive: true });
+  scrollClampEnabled = false;
 }
 
-function attachObserver(root) {
-  const rootChars = (root.textContent || "").length;
-  if (rootChars > MAX_ROOT_CHARS) {
-    rootAttachAttempts.set(root, MAX_ROOT_ATTACH_TRIES);
-    return;
-  }
-  activeObserver = new MutationObserver(() => {});
-  activeObserver.observe(root, OBS_CONFIG);
+function scheduleFinalizeCheck() {
+  if (finalizeTimer) return;
+  finalizeTimer = setTimeout(() => {
+    finalizeTimer = null;
+    handleMutations();
+  }, STABLE_TEXT_MS);
 }
 
-function scheduleRootCheck(delay = 1200) {
-  if (rootCheckTimer) return;
-  rootCheckTimer = safeIdle(() => {
-    rootCheckTimer = null;
-    checkRoot();
-  }, delay);
+function handleMutations() {
+  if (mutationDebounceTimer) {
+    clearTimeout(mutationDebounceTimer);
+    mutationDebounceTimer = null;
+  }
+  const latest = getLatestAssistant();
+  if (!latest) return;
+
+  if (isThinking(latest)) {
+    disableClamp();
+    scheduleFinalizeCheck();
+    return;
+  }
+
+  const stableText = markAssistantState(latest);
+  const streaming = hasStreamingCursor(latest);
+  const sinceChange = Date.now() - lastAssistantChange;
+  const isStable = stableText && !streaming && sinceChange >= STABLE_TEXT_MS;
+
+  if (isStable) {
+    enableClamp();
+  } else {
+    scheduleFinalizeCheck();
+  }
 }
 
-function attemptAttach(root) {
-  if (!root) {
-    scheduleRootCheck(1200);
-    return;
-  }
-  if (root !== activeRoot) {
-    setActiveRoot(root);
-  }
-  if (isThinking(root)) {
-    thinkingMode = true;
-    if (activeObserver) {
-      activeObserver.disconnect();
-      activeObserver = null;
-    }
-    if (scrollClampEnabled) {
-      window.removeEventListener("scroll", clampScroll, { passive: true });
-      scrollClampEnabled = false;
-    }
-    return;
-  }
-  if (activeObserver) {
-    const rootChars = (root.textContent || "").length;
-    if (rootChars > MAX_ROOT_CHARS) {
-      activeObserver.disconnect();
-      activeObserver = null;
-      rootAttachAttempts.set(root, MAX_ROOT_ATTACH_TRIES);
-    }
-    return;
-  }
-  const attempts = getAttachAttempts(root);
-  if (attempts >= MAX_ROOT_ATTACH_TRIES) return;
-  if (!hasAssistantToken(root)) {
-    bumpAttachAttempts(root);
-    scheduleRootCheck(1200);
-    return;
-  }
-  if (!scrollClampEnabled) {
-    window.addEventListener("scroll", clampScroll, { passive: true });
-    scrollClampEnabled = true;
-  }
-  attachObserver(root);
-}
-
-function checkRoot() {
-  if (thinkingMode) return;
-  const latest = getLatestRoot();
-  if (!latest) {
-    scheduleRootCheck(1200);
-    return;
-  }
-  attemptAttach(latest);
-  if (!thinkingMode) scheduleRootCheck(1200);
+function scheduleMutationHandling() {
+  if (mutationDebounceTimer) clearTimeout(mutationDebounceTimer);
+  mutationDebounceTimer = setTimeout(handleMutations, 150);
 }
 
 function clampScroll() {
@@ -156,7 +131,10 @@ function clampScroll() {
 }
 
 function start() {
-  scheduleRootCheck(0);
+  if (!document.body) return;
+  const observer = new MutationObserver(scheduleMutationHandling);
+  observer.observe(document.body, OBS_CONFIG);
+  handleMutations();
 }
 
 if (document.readyState === "loading") {

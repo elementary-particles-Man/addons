@@ -1,6 +1,6 @@
 (() => {
-    const BOOSTER_FLAG = true;
-    if (!BOOSTER_FLAG) return;
+    const BOOSTER_FLAG = Boolean(window.__GPT_BOOSTER_LEGACY__);
+    if (!BOOSTER_FLAG || window.__GPT_BOOSTER_NEW__) return;
 
     // ---- 設定（デフォルト） ----
     let config = {

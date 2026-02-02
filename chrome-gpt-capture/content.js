@@ -1,7 +1,17 @@
 (() => {
-  const VERSION = "v4.2-thinking";
+  const VERSION = "v4.2.1";
   const TAG = "[GPT-Capture]";
-  console.log(`${TAG} content.js active (${VERSION})`);
+  const DEBUG = false;
+  const log = (...args) => {
+    if (DEBUG) console.log(...args);
+  };
+  const warn = (...args) => {
+    if (DEBUG) console.warn(...args);
+  };
+  const error = (...args) => {
+    if (DEBUG) console.error(...args);
+  };
+  log(`${TAG} content.js active (${VERSION})`);
 
   // どの環境か判定（chatgpt / gemini / unknown）
   function detectEnv() {
@@ -12,26 +22,48 @@
   }
 
   let currentEnv = detectEnv();
-  console.log(`${TAG} env detected: ${currentEnv}`);
+  log(`${TAG} env detected: ${currentEnv}`);
 
   // すでに処理したノードを保持（重複キャプチャ防止）
   const processed = new WeakSet();
 
+  function isThinkingNode(node) {
+    if (!node) return false;
+    const testId = node.getAttribute("data-testid") || "";
+    if (/thinking|generating|streaming/i.test(testId)) return true;
+    const className = typeof node.className === "string" ? node.className : "";
+    if (/thinking|generating|streaming/i.test(className)) return true;
+    return Boolean(
+      node.querySelector(
+        '[data-testid*="thinking"], [data-testid*="generating"], .thinking, .generating, .streaming'
+      )
+    );
+  }
+
+  function isAssistantArticle(article) {
+    if (!article) return false;
+    if (article.getAttribute("data-message-author-role") === "assistant") return true;
+    const aria = article.getAttribute("aria-label") || "";
+    if (/assistant response/i.test(aria)) return true;
+    if (article.querySelector('[data-message-author-role="assistant"]')) return true;
+    return isThinkingNode(article);
+  }
+
   // ChatGPT: アシスタントメッセージ（Thinking含む）候補ノードを取得
   function getChatGPTMessageNodes() {
-    // 基本：アシスタント側 article
     const articles = document.querySelectorAll(
-      'article[data-message-author-role="assistant"], article[aria-label^="Assistant response"]'
+      'article[data-testid^="conversation-turn"], article'
     );
 
     const nodes = [];
     articles.forEach((article) => {
-      // 本文部位：markdown / main-panel を優先
+      if (!isAssistantArticle(article)) return;
       const md =
         article.querySelector(
           ".markdown.prose, .markdown.markdown-main-panel, .markdown.markdown-main-panel.stronger"
         ) || article.querySelector(".markdown");
-      nodes.push(md || article);
+      const thinking = article.querySelector('[data-testid*="thinking"], .thinking');
+      nodes.push(md || thinking || article);
     });
 
     return nodes;
@@ -76,13 +108,15 @@
     // 短すぎるノイズを排除（ボタンだけ等）
     if (text.length < 20) return null;
 
-    const now = new Date().toISOString();
+    const now = Date.now();
     return {
       env: currentEnv,
       url: location.href,
       title: document.title,
       ts: now,
-      text
+      text,
+      len: text.length,
+      sample: text.slice(0, 2000)
     };
   }
 
@@ -90,13 +124,13 @@
     try {
       chrome.runtime.sendMessage(
         {
-          type: "capture",
-          payload
+          type: "CAPTURE_LOG",
+          data: payload
         },
         (resp) => {
           // 応答は特に使わないが、エラー時はログに残す
           if (chrome.runtime.lastError) {
-            console.warn(
+            warn(
               `${TAG} sendMessage error:`,
               chrome.runtime.lastError.message
             );
@@ -106,7 +140,7 @@
         }
       );
     } catch (e) {
-      console.error(`${TAG} sendPayload failure`, e);
+      error(`${TAG} sendPayload failure`, e);
     }
   }
 
@@ -118,7 +152,7 @@
     if (!payload) return;
 
     processed.add(node);
-    console.log(
+    log(
       `${TAG} captured (${payload.env})`,
       payload.text.slice(0, 80).replace(/\s+/g, " ") + "..."
     );
@@ -158,8 +192,8 @@
       childList: true,
       subtree: true
     });
-    console.log(`${TAG} observer attached (${VERSION})`);
+    log(`${TAG} observer attached (${VERSION})`);
   } catch (e) {
-    console.error(`${TAG} observer attach failed`, e);
+    error(`${TAG} observer attach failed`, e);
   }
 })();
