@@ -2,6 +2,7 @@
 
 const DEBUG = false;
 const OBS_CONFIG = { childList: true, subtree: true };
+const TIMESTAMP_STYLE_ID = "gpt-booster-visible-timestamp-style";
 const SELECTORS = {
   assistant: '[data-message-author-role="assistant"]',
   rootFallback: '[role="article"]',
@@ -47,6 +48,70 @@ function getLatestAssistant() {
   return fallbackNodes[fallbackNodes.length - 1] || null;
 }
 
+function ensureTimestampStyle() {
+  if (document.getElementById(TIMESTAMP_STYLE_ID)) return;
+  const style = document.createElement("style");
+  style.id = TIMESTAMP_STYLE_ID;
+  style.textContent = `
+    .gpt-booster-ts {
+      font-size: 11px;
+      line-height: 1.3;
+      opacity: 0.72;
+      margin: 0 0 8px 0;
+      letter-spacing: 0.01em;
+    }
+    .gpt-booster-ts-user { color: #2d6a4f; }
+    .gpt-booster-ts-assistant { color: #1d3557; }
+  `;
+  document.head.appendChild(style);
+}
+
+function formatLocalTimestamp(ms) {
+  const parts = new Intl.DateTimeFormat("ja-JP", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
+  }).formatToParts(new Date(ms));
+  const map = Object.create(null);
+  parts.forEach((p) => {
+    map[p.type] = p.value;
+  });
+  return `${map.year}-${map.month}-${map.day} ${map.hour}:${map.minute}:${map.second}`;
+}
+
+function getLocalTimeZoneLabel() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "local";
+  } catch (_) {
+    return "local";
+  }
+}
+
+function upsertVisibleTimestamp(node, role) {
+  if (!(node instanceof HTMLElement)) return;
+  let ts = Number(node.getAttribute("data-gpt-booster-ts"));
+  if (!Number.isFinite(ts) || ts <= 0) {
+    ts = Number(node.getAttribute("data-gpt-booster-jst-ts"));
+  }
+  if (!Number.isFinite(ts) || ts <= 0) {
+    ts = Date.now();
+    node.setAttribute("data-gpt-booster-ts", String(ts));
+  }
+  let badge = node.querySelector(":scope > .gpt-booster-ts");
+  if (!badge) {
+    badge = document.createElement("div");
+    badge.className = "gpt-booster-ts";
+    node.prepend(badge);
+  }
+  const roleLabel = role === "user" ? "USER" : "AI";
+  badge.className = `gpt-booster-ts gpt-booster-ts-${role}`;
+  badge.textContent = `${roleLabel}: ${formatLocalTimestamp(ts)} ${getLocalTimeZoneLabel()}`;
+}
+
 function annotateTurns() {
   const turns = document.querySelectorAll(SELECTORS.turns);
   turns.forEach((node) => {
@@ -54,10 +119,12 @@ function annotateTurns() {
     const role = (node.getAttribute("data-message-author-role") || "").toLowerCase();
     if (role === "user") {
       node.setAttribute("data-gpt-booster-hidden-prefix", "USER:");
+      upsertVisibleTimestamp(node, "user");
       return;
     }
     if (role === "assistant") {
       node.setAttribute("data-gpt-booster-hidden-prefix", "AI:");
+      upsertVisibleTimestamp(node, "assistant");
     }
   });
 }
@@ -149,6 +216,7 @@ function clampScroll() {
 
 function start() {
   if (!document.body) return;
+  ensureTimestampStyle();
   const observer = new MutationObserver(scheduleMutationHandling);
   observer.observe(document.body, OBS_CONFIG);
   annotateTurns();
