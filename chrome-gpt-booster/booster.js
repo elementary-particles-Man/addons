@@ -4,9 +4,9 @@ const DEBUG = false;
 const OBS_CONFIG = { childList: true, subtree: true };
 const TIMESTAMP_STYLE_ID = "gpt-booster-visible-timestamp-style";
 const SELECTORS = {
-  assistant: '[data-message-author-role="assistant"]',
+  assistant: '[data-message-author-role="assistant"], .model-response, [data-test-id="model-response"], message-content',
   rootFallback: '[role="article"]',
-  turns: '[data-message-author-role]'
+  turns: '[data-message-author-role], .user-query, .model-response, [data-test-id="user-query"], [data-test-id="model-response"], user-query, message-content'
 };
 const STABLE_TEXT_MS = 900;
 
@@ -59,7 +59,10 @@ function ensureTimestampStyle() {
       opacity: 0.72;
       margin: 0 0 8px 0;
       letter-spacing: 0.01em;
+      user-select: none;
+      pointer-events: none;
     }
+    .gpt-booster-ts::before { content: attr(data-label); }
     .gpt-booster-ts-user { color: #2d6a4f; }
     .gpt-booster-ts-assistant { color: #1d3557; }
   `;
@@ -91,32 +94,139 @@ function getLocalTimeZoneLabel() {
   }
 }
 
+const STORAGE_PREFIX = "gpt-booster-ts";
+
+function getStableId(node) {
+  if (node.id) return node.id;
+  const testId = node.getAttribute("data-testid");
+  if (testId) return testId;
+  const article = node.closest('article[data-testid]');
+  if (article) {
+    const articleTestId = article.getAttribute("data-testid");
+    if (articleTestId) return articleTestId;
+  }
+  const childWithId = node.querySelector('[id^="user-query-content-"], [id^="message-content-id-"]');
+  if (childWithId && childWithId.id) return childWithId.id;
+  return null;
+}
+
+function getStorageKey(stableId) {
+  // Scope by pathname to prevent collisions for generic IDs (like user-query-content-10)
+  // key format: gpt-booster-ts:<pathname>:<elementId>
+  const scope = window.location.pathname.replace(/\/+$/, "");
+  return `${STORAGE_PREFIX}:${scope}:${stableId}`;
+}
+
+function getNodeTextFingerprint(node) {
+  // Ignore booster timestamp marker itself to keep fingerprints stable.
+  const cloned = node.cloneNode(true);
+  if (cloned instanceof HTMLElement) {
+    cloned.querySelectorAll(".gpt-booster-ts").forEach((el) => el.remove());
+  }
+  const text = (cloned.textContent || "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  return text.slice(0, 1800);
+}
+
+function hashText(text) {
+  // FNV-1a 32-bit (compact, fast, stable in plain JS).
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = (h * 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, "0");
+}
+
+function getFallbackStorageKey(node, role) {
+  const scope = window.location.pathname.replace(/\/+$/, "");
+  const fp = getNodeTextFingerprint(node);
+  if (!fp) return null;
+  return `${STORAGE_PREFIX}:${scope}:fp:${role}:${hashText(fp)}`;
+}
+
 function upsertVisibleTimestamp(node, role) {
   if (!(node instanceof HTMLElement)) return;
-  let ts = Number(node.getAttribute("data-gpt-booster-ts"));
-  if (!Number.isFinite(ts) || ts <= 0) {
-    ts = Number(node.getAttribute("data-gpt-booster-jst-ts"));
+  
+  const stableId = getStableId(node);
+  let ts;
+  let storageKey = null;
+
+  if (stableId) {
+    storageKey = getStorageKey(stableId);
+  } else {
+    storageKey = getFallbackStorageKey(node, role);
   }
+
+  if (storageKey) {
+    try {
+      const stored = localStorage.getItem(storageKey);
+      if (stored) {
+        ts = Number(stored);
+      }
+    } catch (_) {
+      // Ignore storage failures and keep DOM-only timestamp.
+    }
+  }
+
+  // Fallback if not in storage or no stable ID
   if (!Number.isFinite(ts) || ts <= 0) {
-    ts = Date.now();
+    ts = Number(node.getAttribute("data-gpt-booster-ts"));
+    if (!Number.isFinite(ts) || ts <= 0) {
+      ts = Number(node.getAttribute("data-gpt-booster-jst-ts"));
+    }
+    if (!Number.isFinite(ts) || ts <= 0) {
+      ts = Date.now();
+    }
+  }
+
+  // Save to storage if we have a valid key
+  if (storageKey) {
+    try {
+      localStorage.setItem(storageKey, String(ts));
+    } catch (_) {
+      // Storage quota or privacy mode can block writes.
+    }
+  }
+  node.setAttribute("data-gpt-booster-ts", String(ts));
+
+  // Double-check attribute consistency
+  if (ts && node.getAttribute("data-gpt-booster-ts") !== String(ts)) {
     node.setAttribute("data-gpt-booster-ts", String(ts));
   }
+
   let badge = node.querySelector(":scope > .gpt-booster-ts");
   if (!badge) {
     badge = document.createElement("div");
     badge.className = "gpt-booster-ts";
+    badge.setAttribute("aria-hidden", "true");
     node.prepend(badge);
   }
   const roleLabel = role === "user" ? "USER" : "AI";
   badge.className = `gpt-booster-ts gpt-booster-ts-${role}`;
-  badge.textContent = `${roleLabel}: ${formatLocalTimestamp(ts)} ${getLocalTimeZoneLabel()}`;
+  badge.setAttribute("data-label", `${roleLabel}: ${formatLocalTimestamp(ts)} ${getLocalTimeZoneLabel()}`);
+}
+
+function detectRole(node) {
+  const roleAttr = node.getAttribute("data-message-author-role");
+  if (roleAttr) return roleAttr.toLowerCase();
+  
+  const tagName = node.tagName.toLowerCase();
+  const testId = node.getAttribute("data-test-id") || "";
+
+  if (tagName === "user-query" || testId === "user-query" || node.classList.contains("user-query")) return "user";
+  if (tagName === "message-content" || testId === "model-response" || node.classList.contains("model-response")) return "assistant";
+  
+  return null;
 }
 
 function annotateTurns() {
   const turns = document.querySelectorAll(SELECTORS.turns);
   turns.forEach((node) => {
     if (!(node instanceof HTMLElement)) return;
-    const role = (node.getAttribute("data-message-author-role") || "").toLowerCase();
+    const role = detectRole(node);
+    if (!role) return;
+
     if (role === "user") {
       node.setAttribute("data-gpt-booster-hidden-prefix", "USER:");
       upsertVisibleTimestamp(node, "user");
