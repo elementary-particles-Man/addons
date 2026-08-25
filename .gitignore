@@ -27,3 +27,6 @@ node_modules/
 *.webp
 *.ico
 bzImage
+
+# Local ephemeral development helpers
+.scratch/
